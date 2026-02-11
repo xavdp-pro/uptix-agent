@@ -15,6 +15,16 @@ fn get_sites() -> Vec<SiteConfig> {
     serde_json::from_str(&data).unwrap_or_default()
 }
 
+fn send_log(socket: &rust_socketio::client::Client, level: &str, message: &str) {
+    let log_data = json!({
+        "level": level,
+        "message": message,
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    });
+    let _ = socket.emit("agent_log", log_data);
+    println!("[{}] {}", level, message);
+}
+
 fn check_site(url: &str) -> String {
     match reqwest::blocking::get(url) {
         Ok(res) => {
@@ -24,21 +34,23 @@ fn check_site(url: &str) -> String {
                 format!("DOWN ({})", res.status())
             }
         }
-        Err(_) => "DOWN (Error)".to_string(),
+        Err(e) => format!("DOWN (Error: {})", e),
     }
 }
 
 fn main() {
     let host = hostname::get().unwrap_or_else(|_| "unknown".into()).to_string_lossy().to_string();
-    let hub_url = "http://localhost:3001"; // Default OSS Hub port
+    let hub_url = "http://localhost:3001";
 
     println!("Starting Uptix Agent for host: {}", host);
 
-    let _socket = ClientBuilder::new(hub_url)
+    let socket = ClientBuilder::new(hub_url)
         .on("connect", |_ , _| println!("Connected to Uptix Hub"))
         .on("error", |err, _| eprintln!("Error: {:?}", err))
         .connect()
         .expect("Connection failed");
+
+    send_log(&socket, "INFO", &format!("Agent started on host {}", host));
 
     let mut sys = System::new_all();
 
@@ -60,6 +72,9 @@ fn main() {
 
         for config in sites_configs {
             let status = check_site(&config.url);
+            if status.contains("DOWN") {
+                send_log(&socket, "WARN", &format!("Site {} is DOWN: {}", config.url, status));
+            }
             site_results.push(json!({
                 "url": config.url,
                 "status": status
@@ -74,11 +89,7 @@ fn main() {
             "sites": site_results
         });
 
-        println!("Sending metrics: CPU {:.1}% | RAM {:.1}%", cpu_usage, ram_usage);
-        
-        if let Err(e) = _socket.emit("agent_metrics", metrics) {
-            eprintln!("Failed to emit metrics: {:?}", e);
-        }
+        let _ = socket.emit("agent_metrics", metrics);
 
         thread::sleep(Duration::from_secs(10));
     }
