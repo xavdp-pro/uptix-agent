@@ -3,7 +3,7 @@ use rust_socketio::{ClientBuilder, Payload, RawClient};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::Duration;
-use std::{thread, fs};
+use std::{thread, fs, env};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct SiteConfig {
@@ -11,6 +11,12 @@ struct SiteConfig {
 }
 
 fn get_sites() -> Vec<SiteConfig> {
+    if let Ok(sites_env) = env::var("UPTIX_MONITOR_SITES") {
+        return sites_env.split(',')
+            .map(|s| SiteConfig { url: s.trim().to_string() })
+            .filter(|s| !s.url.is_empty())
+            .collect();
+    }
     let data = fs::read_to_string("sites.json").unwrap_or_else(|_| "[]".to_string());
     serde_json::from_str(&data).unwrap_or_default()
 }
@@ -39,28 +45,25 @@ fn check_site(url: &str) -> String {
 }
 
 fn main() {
-    let host = hostname::get().unwrap_or_else(|_| "unknown".into()).to_string_lossy().to_string();
-    let hub_url = "http://localhost:3001";
+    let host = env::var("UPTIX_SERVER_NAME")
+        .unwrap_or_else(|_| hostname::get().unwrap_or_else(|_| "unknown".into()).to_string_lossy().to_string());
+    let hub_url = env::var("UPTIX_HUB_URL")
+        .unwrap_or_else(|_| "http://localhost:3001".to_string());
 
-    println!("Starting Uptix Agent for host: {}", host);
-
+    println!("🚀 Uptix Agent starting...");
     let socket = ClientBuilder::new(hub_url)
-        .on("connect", |_ , _| println!("Connected to Uptix Hub"))
-        .on("error", |err, _| eprintln!("Error: {:?}", err))
+        .on("connect", |_ , _| println!("✅ Connected to Uptix Hub"))
         .connect()
-        .expect("Connection failed");
+        .expect("Critical: Hub unreachable");
 
-    send_log(&socket, "INFO", &format!("Agent started on host {}", host));
+    send_log(&socket, "INFO", &format!("Agent v0.1.0 online on {}", host));
 
     let mut sys = System::new_all();
-
     loop {
         sys.refresh_cpu();
         sys.refresh_memory();
-        
         let cpu_usage = sys.global_cpu_info().cpu_usage();
         let ram_usage = (sys.used_memory() as f32 / sys.total_memory() as f32) * 100.0;
-        
         let disks = Disks::new_with_refreshed_list();
         let disk_usage = disks.iter().next().map(|d| {
             let used = d.total_space() - d.available_space();
@@ -69,16 +72,9 @@ fn main() {
 
         let sites_configs = get_sites();
         let mut site_results = Vec::new();
-
         for config in sites_configs {
             let status = check_site(&config.url);
-            if status.contains("DOWN") {
-                send_log(&socket, "WARN", &format!("Site {} is DOWN: {}", config.url, status));
-            }
-            site_results.push(json!({
-                "url": config.url,
-                "status": status
-            }));
+            site_results.push(json!({ "url": config.url, "status": status }));
         }
 
         let metrics = json!({
@@ -90,7 +86,6 @@ fn main() {
         });
 
         let _ = socket.emit("agent_metrics", metrics);
-
         thread::sleep(Duration::from_secs(10));
     }
 }
