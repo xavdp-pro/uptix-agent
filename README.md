@@ -1,17 +1,7 @@
 # Uptix Agent (Rust) 🚀
 
-Ultra-lightweight monitoring agent for Uptix.
-
-## Quick Start (Docker)
+## Management with PM2
 ```bash
-docker run -d \
-  -e UPTIX_HUB_URL="http://your-hub-ip:3001" \
-  -e UPTIX_SERVER_NAME="my-web-server" \
-  -e UPTIX_MONITOR_SITES="https://google.com" \
-  uptix-agent
+cargo build --release
+pm2 start ecosystem.config.cjs
 ```
-
-## Features
-- Zero Configuration (uses defaults).
-- Tiny footprint.
-- Environment variable driven.
